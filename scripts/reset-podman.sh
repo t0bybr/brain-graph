@@ -12,6 +12,6 @@ echo "Stopping services..."
 podman-compose down -v
 
 echo "Removing volumes..."
-podman volume rm postgres_postgres_data || true
+podman volume rm postgres_data || true
 
 echo "✅ Reset complete. Run ./scripts/start.sh to initialize fresh."

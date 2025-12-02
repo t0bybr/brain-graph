@@ -8,6 +8,8 @@ volumes:
   postgres_data:
   models_cache:
   traefik_certs:
+  prometheus_data:
+  grafana_data:
 
 services:
   # ============================================
@@ -48,7 +50,7 @@ services:
 
     volumes:
       # CRITICAL: Use :Z for SELinux labeling on rootless Podman
-      - ./docker/traefik/certs:/certs:Z,ro
+      - traefik_certs:/certs
       - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:Z,ro
       - ./docker/traefik/dynamic:/etc/traefik/dynamic:Z,ro
 
@@ -91,9 +93,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: brain_graph
-      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - postgres_data:/var/lib/postgresql/data:Z
+      - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro,Z
       - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro,Z
     ports:
@@ -124,7 +125,7 @@ services:
       - DEVICE=cpu
       - PORT=8000
     volumes:
-      - models_cache:/root/.cache:Z
+      - models_cache:/root/.cache
     # Podman GPU access
     security_opt:
       - label=disable
@@ -160,7 +161,7 @@ services:
       - DEVICE=cpu
       - PORT=8000
     volumes:
-      - models_cache:/root/.cache:Z
+      - models_cache:/root/.cache
     security_opt:
       - label=disable
     devices:
@@ -189,7 +190,7 @@ services:
       - DEVICE=cpu
       - PORT=8000
     volumes:
-      - models_cache:/root/.cache:Z
+      - models_cache:/root/.cache
     security_opt:
       - label=disable
     devices:
@@ -219,7 +220,7 @@ services:
       - DEVICE=cpu
       - PORT=8000
     volumes:
-      - models_cache:/root/.cache:Z
+      - models_cache:/root/.cache
     security_opt:
       - label=disable
     devices:
@@ -392,7 +393,7 @@ services:
     container_name: brain_graph_prometheus
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
-      - ./docker/prometheus/data:/prometheus:Z
+      - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -412,7 +413,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_SERVER_ROOT_URL=http://grafana.${DOMAIN:-pk.ms}:8080
     volumes:
-      - ./docker/grafana/data:/var/lib/grafana:Z
+      - grafana_data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro,Z
     depends_on:
       - prometheus

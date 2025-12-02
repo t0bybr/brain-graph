@@ -1,0 +1,367 @@
+-- ============================================
+-- Apache AGE: Graph Database Integration
+-- OPTIONAL - System works without AGE
+-- ============================================
+
+\c brain_graph
+
+-- ============================================
+-- AGE HELPER FUNCTIONS
+-- ============================================
+
+-- Check if AGE cypher is available
+CREATE OR REPLACE FUNCTION age_cypher_available()
+RETURNS BOOLEAN AS $$
+DECLARE
+    func_exists BOOLEAN;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM pg_proc p
+        JOIN pg_namespace n ON p.pronamespace = n.oid
+        WHERE n.nspname = 'ag_catalog'
+        AND p.proname = 'cypher'
+    ) INTO func_exists;
+    
+    RETURN func_exists;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Safe AGE execution wrapper
+CREATE OR REPLACE FUNCTION safe_cypher_exec(
+    graph_name TEXT,
+    cypher_query TEXT
+)
+RETURNS BOOLEAN AS $$
+BEGIN
+    EXECUTE format(
+        'SELECT * FROM ag_catalog.cypher(%L, $cypher$%s$cypher$) AS (result ag_catalog.agtype)',
+        graph_name,
+        cypher_query
+    );
+    RETURN TRUE;
+EXCEPTION
+    WHEN undefined_function THEN
+        RETURN FALSE;
+    WHEN OTHERS THEN
+        RAISE WARNING 'AGE cypher failed: %', SQLERRM;
+        RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- AGE GRAPH SETUP
+-- ============================================
+
+DO $$
+DECLARE
+    age_available BOOLEAN;
+BEGIN
+    -- Try to load AGE
+    BEGIN
+        EXECUTE 'LOAD ''age''';
+        RAISE NOTICE '✓ AGE extension loaded';
+    EXCEPTION
+        WHEN insufficient_privilege THEN
+            RAISE WARNING '○ Cannot LOAD age (insufficient privileges)';
+        WHEN OTHERS THEN
+            RAISE WARNING '○ AGE load failed: %', SQLERRM;
+    END;
+
+    -- Check availability
+    SELECT age_cypher_available() INTO age_available;
+    
+    IF age_available THEN
+        -- Set search path
+        SET search_path = ag_catalog, "$user", public;
+        
+        -- Create graph if not exists
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM ag_catalog.ag_graph WHERE name = 'brain_graph'
+            ) THEN
+                PERFORM ag_catalog.create_graph('brain_graph');
+                RAISE NOTICE '✓ Graph "brain_graph" created';
+            ELSE
+                RAISE NOTICE '✓ Graph "brain_graph" already exists';
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING '○ Could not create graph: %', SQLERRM;
+        END;
+    ELSE
+        RAISE NOTICE '○ AGE not available - graph features disabled';
+        RAISE NOTICE '  The system will work with relational tables only';
+    END IF;
+END $$;
+
+-- Reset search path
+SET search_path = public;
+
+-- ============================================
+-- AGE SYNC TRIGGERS
+-- ============================================
+-- These sync relational data to AGE graph
+-- They fail gracefully if AGE is not available
+
+CREATE OR REPLACE FUNCTION sync_node_to_age()
+RETURNS TRIGGER AS $$
+DECLARE
+    cypher_query TEXT;
+    age_available BOOLEAN;
+BEGIN
+    SELECT age_cypher_available() INTO age_available;
+    IF NOT age_available THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    BEGIN
+        IF TG_OP = 'INSERT' THEN
+            cypher_query := format(
+                'CREATE (:%I {node_id: %L, title: %L, created_at: %L})',
+                NEW.type, NEW.id, NEW.title, NEW.created_at
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN NEW;
+
+        ELSIF TG_OP = 'UPDATE' THEN
+            cypher_query := format(
+                'MATCH (n {node_id: %L}) SET n.title = %L, n.updated_at = %L',
+                NEW.id, NEW.title, NEW.updated_at
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN NEW;
+
+        ELSIF TG_OP = 'DELETE' THEN
+            cypher_query := format(
+                'MATCH (n {node_id: %L}) DETACH DELETE n',
+                OLD.id
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN OLD;
+        END IF;
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'AGE sync failed for node: %', SQLERRM;
+    END;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION sync_edge_to_age()
+RETURNS TRIGGER AS $$
+DECLARE
+    props_json TEXT;
+    cypher_query TEXT;
+    age_available BOOLEAN;
+BEGIN
+    SELECT age_cypher_available() INTO age_available;
+    IF NOT age_available THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    BEGIN
+        IF TG_OP = 'INSERT' THEN
+            props_json := COALESCE(NEW.properties::text, '{}');
+            cypher_query := format(
+                'MATCH (a {node_id: %L}), (b {node_id: %L}) CREATE (a)-[:%I %s]->(b)',
+                NEW.source_id, NEW.target_id, NEW.edge_type, props_json
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN NEW;
+
+        ELSIF TG_OP = 'UPDATE' THEN
+            props_json := COALESCE(NEW.properties::text, '{}');
+            cypher_query := format(
+                'MATCH (a {node_id: %L})-[r:%I]->(b {node_id: %L}) SET r = %s',
+                NEW.source_id, NEW.edge_type, NEW.target_id, props_json
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN NEW;
+
+        ELSIF TG_OP = 'DELETE' THEN
+            cypher_query := format(
+                'MATCH (a {node_id: %L})-[r:%I]->(b {node_id: %L}) DELETE r',
+                OLD.source_id, OLD.edge_type, OLD.target_id
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            RETURN OLD;
+        END IF;
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'AGE edge sync failed: %', SQLERRM;
+    END;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- CREATE AGE SYNC TRIGGERS
+-- ============================================
+
+DROP TRIGGER IF EXISTS node_sync_trigger ON nodes;
+CREATE TRIGGER node_sync_trigger
+    AFTER INSERT OR UPDATE OR DELETE ON nodes
+    FOR EACH ROW EXECUTE FUNCTION sync_node_to_age();
+
+DROP TRIGGER IF EXISTS edge_sync_trigger ON graph_edges;
+CREATE TRIGGER edge_sync_trigger
+    AFTER INSERT OR UPDATE OR DELETE ON graph_edges
+    FOR EACH ROW EXECUTE FUNCTION sync_edge_to_age();
+
+-- ============================================
+-- AGE REBUILD FUNCTION (for recovery)
+-- ============================================
+
+CREATE OR REPLACE FUNCTION rebuild_graph_from_relational(
+    batch_size INTEGER DEFAULT 1000,
+    verbose BOOLEAN DEFAULT TRUE
+)
+RETURNS TABLE(
+    nodes_processed INTEGER,
+    edges_processed INTEGER,
+    duration_seconds NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    node_count INTEGER := 0;
+    edge_count INTEGER := 0;
+    start_time TIMESTAMP;
+    end_time TIMESTAMP;
+    node_record RECORD;
+    edge_record RECORD;
+    cypher_query TEXT;
+BEGIN
+    -- Check if AGE is available
+    IF NOT age_cypher_available() THEN
+        RAISE NOTICE '○ AGE not available - cannot rebuild graph';
+        RETURN QUERY SELECT 0::INTEGER, 0::INTEGER, 0::NUMERIC;
+        RETURN;
+    END IF;
+
+    start_time := clock_timestamp();
+    RAISE NOTICE '🔄 Starting graph rebuild from relational tables...';
+
+    -- Step 1: Clear existing graph
+    RAISE NOTICE '  → Clearing existing AGE graph...';
+    BEGIN
+        EXECUTE format(
+            'SELECT * FROM ag_catalog.cypher(%L, $q$MATCH (n) DETACH DELETE n$q$) AS (v ag_catalog.agtype)',
+            'brain_graph'
+        );
+    EXCEPTION
+        WHEN OTHERS THEN
+            RAISE WARNING 'Could not clear graph: %', SQLERRM;
+    END;
+
+    -- Step 2: Rebuild nodes
+    RAISE NOTICE '  → Rebuilding nodes...';
+    FOR node_record IN
+        SELECT id, type, title, created_at FROM nodes ORDER BY created_at
+    LOOP
+        BEGIN
+            cypher_query := format(
+                'CREATE (:%I {node_id: %L, title: %L, created_at: %L})',
+                node_record.type, node_record.id, node_record.title, node_record.created_at
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            node_count := node_count + 1;
+            IF node_count % batch_size = 0 THEN
+                RAISE NOTICE '    ✓ Processed % nodes...', node_count;
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to create node %: %', node_record.id, SQLERRM;
+        END;
+    END LOOP;
+
+    RAISE NOTICE '  ✓ Rebuilt % nodes', node_count;
+
+    -- Step 3: Rebuild edges
+    RAISE NOTICE '  → Rebuilding edges...';
+    FOR edge_record IN
+        SELECT source_id, target_id, edge_type, properties FROM graph_edges ORDER BY created_at
+    LOOP
+        BEGIN
+            cypher_query := format(
+                'MATCH (a {node_id: %L}), (b {node_id: %L}) CREATE (a)-[:%I %s]->(b)',
+                edge_record.source_id, edge_record.target_id, edge_record.edge_type,
+                COALESCE(edge_record.properties::text, '{}')
+            );
+            EXECUTE format(
+                'SELECT * FROM ag_catalog.cypher(%L, $q$%s$q$) AS (v ag_catalog.agtype)',
+                'brain_graph', cypher_query
+            );
+            edge_count := edge_count + 1;
+            IF edge_count % batch_size = 0 THEN
+                RAISE NOTICE '    ✓ Processed % edges...', edge_count;
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to create edge % -> %: %',
+                    edge_record.source_id, edge_record.target_id, SQLERRM;
+        END;
+    END LOOP;
+
+    end_time := clock_timestamp();
+    RAISE NOTICE '  ✓ Rebuilt % edges', edge_count;
+    RAISE NOTICE '✓ Graph rebuild complete in % seconds',
+        EXTRACT(EPOCH FROM (end_time - start_time))::NUMERIC(10,2);
+
+    RETURN QUERY SELECT
+        node_count, edge_count,
+        EXTRACT(EPOCH FROM (end_time - start_time))::NUMERIC(10,2);
+END;
+$$;
+
+COMMENT ON FUNCTION rebuild_graph_from_relational(INTEGER, BOOLEAN) IS 'Rebuild AGE graph from relational tables (for recovery/sync)';
+
+-- ============================================
+-- STATUS CHECK
+-- ============================================
+
+DO $$
+DECLARE
+    age_available BOOLEAN;
+BEGIN
+    SELECT age_cypher_available() INTO age_available;
+    
+    RAISE NOTICE '============================================';
+    IF age_available THEN
+        RAISE NOTICE '✓ AGE integration enabled';
+        RAISE NOTICE '  • Graph: brain_graph';
+        RAISE NOTICE '  • Node sync trigger: active';
+        RAISE NOTICE '  • Edge sync trigger: active';
+    ELSE
+        RAISE NOTICE '○ AGE integration disabled';
+        RAISE NOTICE '  System works with relational tables only';
+        RAISE NOTICE '  Install Apache AGE to enable graph queries';
+    END IF;
+    RAISE NOTICE '============================================';
+END $$;

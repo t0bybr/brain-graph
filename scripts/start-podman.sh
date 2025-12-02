@@ -43,30 +43,29 @@ fi
 echo "Starting infrastructure..."
 podman-compose -f podman-compose.yml up -d traefik postgres redis prometheus grafana
 
-# Wait for PostgreSQL
-echo "Waiting for PostgreSQL..."
+# Wait for PostgreSQL to be ready and complete initialization
+echo "Waiting for PostgreSQL initialization..."
 until podman exec brain_graph_db pg_isready -U postgres > /dev/null 2>&1; do
     echo -n "."
     sleep 1
 done
-echo " ✅"
 
-# Run migrations in order
-echo "Running migrations..."
-
-# 1. Init database & user
-echo "  1/3 Initializing database..."
-podman exec -i brain_graph_db psql -U postgres < migrations/000_init_database.sql
-
-# 2. Pre-init (search_path)
-echo "  2/3 Setting up search path..."
-podman exec -i brain_graph_db psql -U postgres < migrations/001_pre_init.sql
-
-# 3. Main schema
-echo "  3/3 Creating schema..."
-podman exec -i brain_graph_db psql -U postgres -d brain_graph < migrations/002_brain_graph_complete_v3.sql
-
-echo "✅ Migrations complete"
+# Additional check: make sure database is fully initialized and ready
+echo -n "Waiting for database initialization to complete"
+for i in {1..60}; do
+    if podman exec brain_graph_db psql -U postgres -d brain_graph -c "SELECT 1 FROM pg_tables WHERE tablename='nodes' LIMIT 1" > /dev/null 2>&1; then
+        echo " ✅"
+        echo "✅ Database initialized successfully!"
+        break
+    fi
+    echo -n "."
+    sleep 2
+    if [ $i -eq 60 ]; then
+        echo " ⚠️"
+        echo "⚠️  Database initialization may still be in progress"
+        echo "    Check logs with: podman logs brain_graph_db"
+    fi
+done
 
 # Start services
 # echo "Starting application services..."

@@ -12,6 +12,6 @@ echo "Stopping services..."
 docker-compose down -v
 
 echo "Removing volumes..."
-docker volume rm postgres_postgres_data || true
+docker volume rm postgres_data || true
 
 echo "✅ Reset complete. Run ./scripts/start.sh to initialize fresh."
