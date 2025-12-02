@@ -1,0 +1,44 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+.env
+
+# --- Datenspeicher & Uploads (WICHTIG!) ---
+# Du hast einen 'storage' Ordner im Root und im Backend.
+# Diese enthalten wahrscheinlich User-Uploads oder DB-Files.
+storage/
+
+# --- Docker & Monitoring Volumes ---
+# Verhindert, dass Datenbanken oder Logs committed werden
+docker/grafana/data/
+docker/prometheus/data/
+docker/postgres/data/
+
+# --- Sicherheit / Zertifikate (SEHR WICHTIG!) ---
+# Niemals Private Keys committen!
+*.pem
+*.key
+docker/traefik/certs/
+
+# --- Frontend (Node.js) ---
+# Falls du im frontend-Ordner npm install machst
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.npm/
+
+# --- OS & IDE Junk ---
+.DS_Store
+.vscode/
+.idea/
+*.log
+.zed/
+
+# --- Agents ---
+.claude/
+.codex/
+.opencode/

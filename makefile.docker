@@ -1,0 +1,47 @@
+.PHONY: help start stop restart logs reset init test deploy
+
+help:
+	@echo "Brain Graph Commands:"
+	@echo "  make start    - Start all services"
+	@echo "  make stop     - Stop all services"
+	@echo "  make restart  - Restart all services"
+	@echo "  make logs     - Show backend logs"
+	@echo "  make reset    - Reset database (WARNING: deletes data)"
+	@echo "  make init     - Initialize fresh database"
+	@echo "  make test     - Run tests"
+
+start:
+	@./scripts/start.sh
+
+stop:
+	@./scripts/stop.sh
+
+restart: stop start
+
+logs:
+	@docker-compose logs -f backend
+
+logs-db:
+	@docker-compose logs -f postgres
+
+logs-all:
+	@docker-compose logs -f
+
+reset:
+	@./scripts/reset.sh
+
+init:
+	@docker-compose exec postgres psql -U postgres -d brain_graph -f /docker-entrypoint-initdb.d/001_brain_graph_complete_v3.sql
+
+test:
+	@docker-compose exec backend pytest
+
+shell:
+	@docker-compose exec backend /bin/bash
+
+db:
+	@docker-compose exec postgres psql -U postgres -d brain_graph
+
+deploy:
+	@echo "Deploying to production..."
+	@docker-compose -f docker-compose.prod.yml up -d --build

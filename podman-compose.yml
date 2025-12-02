@@ -1,0 +1,422 @@
+networks:
+  brain_graph_network:
+    external: true
+  traefik_public:
+    external: true
+
+volumes:
+  postgres_data:
+  models_cache:
+  traefik_certs:
+
+services:
+  # ============================================
+  # TRAEFIK (with Podman socket)
+  # ============================================
+  traefik:
+    image: docker.io/traefik:v3.0
+    container_name: brain_graph_traefik
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+
+      # Providers
+      - "--providers.docker=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+
+      # Entrypoints
+      - "--entrypoints.web.address=:8080"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:8443"
+      - "--entrypoints.websecure.http.tls=true"
+      - "--entrypoints.postgres.address=:5432"
+
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+
+      # Metrics
+      - "--metrics.prometheus=true"
+
+    ports:
+      - "8080:8080" # HTTP (redirects to HTTPS)
+      - "8443:8443" # HTTPS
+      - "9080:8080" # Dashboard (API)
+      - "15432:5432" # PostgreSQL passthrough
+
+    volumes:
+      # CRITICAL: Use :Z for SELinux labeling on rootless Podman
+      - ./docker/traefik/certs:/certs:Z,ro
+      - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:Z,ro
+      - ./docker/traefik/dynamic:/etc/traefik/dynamic:Z,ro
+
+    environment:
+      - TRAEFIK_LOG_LEVEL=${TRAEFIK_LOG_LEVEL:-INFO}
+
+    networks:
+      - traefik_public
+      - brain_graph_network
+
+    restart: unless-stopped
+
+  # ============================================
+  # PODMAN SOCKET PROXY (replaces docker.sock)
+  # ============================================
+  podman-socket-proxy:
+    image: docker.io/tecnativa/docker-socket-proxy:latest
+    container_name: brain_graph_socket_proxy
+    privileged: true
+    environment:
+      - CONTAINERS=1
+      - SERVICES=1
+      - TASKS=1
+      - NETWORKS=1
+    volumes:
+      - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock:Z
+    networks:
+      - brain_graph_network
+    restart: unless-stopped
+
+  # ============================================
+  # DATABASE (PostgreSQL + Extensions)
+  # ============================================
+  postgres:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile
+    container_name: brain_graph_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: brain_graph
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:Z
+      - ./migrations:/docker-entrypoint-initdb.d:ro,Z
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro,Z
+    ports:
+      - "5432:5432"
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # TEXT ENCODER (Jina v2) - with GPU
+  # ============================================
+  jina:
+    build:
+      context: ./docker/encoders/jina
+      dockerfile: Dockerfile
+    container_name: brain_graph_jina
+    environment:
+      - MODEL_NAME=jinaai/jina-embeddings-v2-base-en
+      - MAX_BATCH_SIZE=32
+      # - DEVICE=cuda
+      - DEVICE=cpu
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache:Z
+    # Podman GPU access
+    security_opt:
+      - label=disable
+    devices:
+      - /dev/dri:/dev/dri # For Intel/AMD GPUs
+    # For NVIDIA (requires nvidia-container-toolkit):
+    # device_cgroup_rules:
+    #   - 'c 195:* rmw'
+    #   - 'c 509:* rmw'
+    # For proper NVIDIA support with Podman, use hooks:
+    # See: https://github.com/containers/podman/blob/main/docs/tutorials/basic_networking.md
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # IMAGE ENCODER (SigLIP)
+  # ============================================
+  siglip:
+    build:
+      context: ./docker/encoders/siglip
+      dockerfile: Dockerfile
+    container_name: brain_graph_siglip
+    environment:
+      - MODEL_NAME=google/siglip-so400m-patch14-384
+      # - DEVICE=cuda
+      - DEVICE=cpu
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache:Z
+    security_opt:
+      - label=disable
+    devices:
+      - /dev/dri:/dev/dri
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # CODE ENCODER (GraphCodeBERT)
+  # ============================================
+  codebert:
+    build:
+      context: ./docker/encoders/codebert
+      dockerfile: Dockerfile
+    container_name: brain_graph_codebert
+    environment:
+      - MODEL_NAME=microsoft/graphcodebert-base
+      # - DEVICE=cuda
+      - DEVICE=cpu
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache:Z
+    security_opt:
+      - label=disable
+    devices:
+      - /dev/dri:/dev/dri
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # AUDIO ENCODER (Whisper)
+  # ============================================
+  whisper:
+    build:
+      context: ./docker/encoders/whisper
+      dockerfile: Dockerfile
+    container_name: brain_graph_whisper
+    environment:
+      - MODEL_NAME=openai/whisper-large-v3
+      - ENCODER_ONLY=true
+      # - DEVICE=cuda
+      - DEVICE=cpu
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache:Z
+    security_opt:
+      - label=disable
+    devices:
+      - /dev/dri:/dev/dri
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # BACKEND (FastAPI)
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_backend
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - JINA_URL=http://jina:8000
+      - SIGLIP_URL=http://siglip:8000
+      - CODEBERT_URL=http://codebert:8000
+      - WHISPER_URL=http://whisper:8000
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app:Z
+      - ./storage:/app/storage:Z
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+
+      # HTTP → HTTPS Redirect
+      - "traefik.http.routers.backend-http.rule=Host(`api.${DOMAIN:-pk.ms}`)"
+      - "traefik.http.routers.backend-http.entrypoints=web"
+      - "traefik.http.routers.backend-http.middlewares=redirect-to-https"
+
+      # HTTPS Router
+      - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN:-pk.ms}`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+      # Redirect Middleware
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+
+  # ============================================
+  # REDIS
+  # ============================================
+  redis:
+    image: docker.io/redis:7-alpine
+    container_name: brain_graph_redis
+    volumes:
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro,Z
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # WORKER (Celery)
+  # ============================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_worker
+    command: celery -A app.worker worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - REDIS_URL=redis://redis:6379
+      - JINA_URL=http://jina:8000
+      - SIGLIP_URL=http://siglip:8000
+      - CODEBERT_URL=http://codebert:8000
+      - WHISPER_URL=http://whisper:8000
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    volumes:
+      - ./backend:/app:Z
+      - ./storage:/app/storage:Z
+    networks:
+      - brain_graph_network
+    restart: unless-stopped
+
+  # ============================================
+  # BEAT (Celery)
+  # ============================================
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_beat
+    command: celery -A app.worker beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app:Z
+    networks:
+      - brain_graph_network
+    restart: unless-stopped
+
+  # ============================================
+  # FLOWER (Celery Monitoring)
+  # ============================================
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_flower
+    command: celery -A app.worker flower --port=5555
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379
+      - FLOWER_PORT=5555
+    depends_on:
+      - redis
+      - worker
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # FRONTEND (React + Vite)
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: brain_graph_frontend
+    environment:
+      - VITE_API_URL=http://api.${DOMAIN:-pk.ms}:8080
+    volumes:
+      - ./frontend:/app:Z
+      - /app/node_modules
+    networks:
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # PROMETHEUS
+  # ============================================
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    container_name: brain_graph_prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+      - ./docker/prometheus/data:/prometheus:Z
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped
+
+  # ============================================
+  # GRAFANA
+  # ============================================
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    container_name: brain_graph_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=http://grafana.${DOMAIN:-pk.ms}:8080
+    volumes:
+      - ./docker/grafana/data:/var/lib/grafana:Z
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro,Z
+    depends_on:
+      - prometheus
+    networks:
+      - brain_graph_network
+      - traefik_public
+    restart: unless-stopped

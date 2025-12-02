@@ -1,0 +1,52 @@
+# Dynamic middleware configuration
+
+http:
+  middlewares:
+    # Security Headers
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        customResponseHeaders:
+          X-Robots-Tag: "none"
+
+    # Rate Limiting
+    rate-limit-standard:
+      rateLimit:
+        average: 100
+        period: 1m
+        burst: 50
+
+    rate-limit-api:
+      rateLimit:
+        average: 200
+        period: 1m
+        burst: 100
+
+    # Compression
+    compression:
+      compress: true
+
+    # IP Whitelist (for admin panels)
+    admin-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "192.168.0.0/16"
+          - "10.0.0.0/8"
+
+    # Basic Auth
+    admin-auth:
+      basicAuth:
+        users:
+          # Generate with: echo $(htpasswd -nb user password)
+          - "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"
+
+    # Retry
+    retry:
+      attempts: 3
+      initialInterval: 100ms

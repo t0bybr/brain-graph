@@ -1,0 +1,541 @@
+networks:
+  brain_graph_network:
+    driver: bridge
+  traefik_public:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  models_cache:
+  traefik_certs:
+
+services:
+  # ============================================
+  # TRAEFIK (Reverse Proxy & Load Balancer)
+  # ============================================
+  traefik:
+    image: traefik:v3.0
+    container_name: brain_graph_traefik
+    command:
+      # API & Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+
+      # Providers
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik_public"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.postgres.address=:5432"
+      - "--entrypoints.redis.address=:6379"
+
+      # SSL/TLS
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/certs/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+
+      # Logging
+      - "--log.level=${TRAEFIK_LOG_LEVEL:-INFO}"
+      - "--accesslog=true"
+
+      # Metrics
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entrypoint=metrics"
+      - "--entrypoints.metrics.address=:8082"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Dashboard
+      - "5432:5432" # PostgreSQL
+      - "6379:6379" # Redis
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certs:/certs
+      - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./docker/traefik/dynamic:/etc/traefik/dynamic:ro
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+      - TRAEFIK_LOG_LEVEL=${TRAEFIK_LOG_LEVEL:-INFO}
+    networks:
+      - traefik_public
+      - brain_graph_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN:-pk.ms}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls=true"
+    restart: unless-stopped
+
+  # ============================================
+  # DATABASE (PostgreSQL + Extensions)
+  # ============================================
+  postgres:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile
+    container_name: brain_graph_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: brain_graph
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+
+      # TCP Router for PostgreSQL
+      - "traefik.tcp.routers.postgres.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.postgres.entrypoints=postgres"
+      - "traefik.tcp.routers.postgres.service=postgres"
+      - "traefik.tcp.services.postgres.loadbalancer.server.port=5432"
+    restart: unless-stopped
+
+  # ============================================
+  # TEXT ENCODER (Jina v2)
+  # ============================================
+  jina:
+    build:
+      context: ./docker/encoders/jina
+      dockerfile: Dockerfile
+    container_name: brain_graph_jina
+    environment:
+      - MODEL_NAME=jinaai/jina-embeddings-v2-base-en
+      - MAX_BATCH_SIZE=32
+      - DEVICE=cuda
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jina.rule=Host(`jina.${DOMAIN:-localhost}`) || PathPrefix(`/jina`)"
+      - "traefik.http.routers.jina.entrypoints=web"
+      - "traefik.http.services.jina.loadbalancer.server.port=8000"
+
+      # Health check
+      - "traefik.http.services.jina.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.jina.loadbalancer.healthcheck.interval=30s"
+
+      # Strip prefix middleware
+      - "traefik.http.middlewares.jina-strip.stripprefix.prefixes=/jina"
+      - "traefik.http.routers.jina.middlewares=jina-strip"
+    restart: unless-stopped
+
+  # ============================================
+  # IMAGE ENCODER (SigLIP)
+  # ============================================
+  siglip:
+    build:
+      context: ./docker/encoders/siglip
+      dockerfile: Dockerfile
+    container_name: brain_graph_siglip
+    environment:
+      - MODEL_NAME=google/siglip-so400m-patch14-384
+      - DEVICE=cuda
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 10G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.siglip.rule=Host(`siglip.${DOMAIN:-localhost}`) || PathPrefix(`/siglip`)"
+      - "traefik.http.routers.siglip.entrypoints=web"
+      - "traefik.http.services.siglip.loadbalancer.server.port=8000"
+      - "traefik.http.services.siglip.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.middlewares.siglip-strip.stripprefix.prefixes=/siglip"
+      - "traefik.http.routers.siglip.middlewares=siglip-strip"
+    restart: unless-stopped
+
+  # ============================================
+  # CODE ENCODER (GraphCodeBERT)
+  # ============================================
+  codebert:
+    build:
+      context: ./docker/encoders/codebert
+      dockerfile: Dockerfile
+    container_name: brain_graph_codebert
+    environment:
+      - MODEL_NAME=microsoft/graphcodebert-base
+      - DEVICE=cuda
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.codebert.rule=Host(`codebert.${DOMAIN:-localhost}`) || PathPrefix(`/codebert`)"
+      - "traefik.http.routers.codebert.entrypoints=web"
+      - "traefik.http.services.codebert.loadbalancer.server.port=8000"
+      - "traefik.http.services.codebert.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.middlewares.codebert-strip.stripprefix.prefixes=/codebert"
+      - "traefik.http.routers.codebert.middlewares=codebert-strip"
+    restart: unless-stopped
+
+  # ============================================
+  # AUDIO ENCODER (Whisper)
+  # ============================================
+  whisper:
+    build:
+      context: ./docker/encoders/whisper
+      dockerfile: Dockerfile
+    container_name: brain_graph_whisper
+    environment:
+      - MODEL_NAME=openai/whisper-large-v3
+      - ENCODER_ONLY=true
+      - DEVICE=cuda
+      - PORT=8000
+    volumes:
+      - models_cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 12G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whisper.rule=Host(`whisper.${DOMAIN:-localhost}`) || PathPrefix(`/whisper`)"
+      - "traefik.http.routers.whisper.entrypoints=web"
+      - "traefik.http.services.whisper.loadbalancer.server.port=8000"
+      - "traefik.http.services.whisper.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.middlewares.whisper-strip.stripprefix.prefixes=/whisper"
+      - "traefik.http.routers.whisper.middlewares=whisper-strip"
+    restart: unless-stopped
+
+  # ============================================
+  # BACKEND (FastAPI)
+  # ============================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_backend
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - JINA_URL=http://jina:8000
+      - SIGLIP_URL=http://siglip:8000
+      - CODEBERT_URL=http://codebert:8000
+      - WHISPER_URL=http://whisper:8000
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+
+      # HTTP Router
+      - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN:-localhost}`) || PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.entrypoints=web"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+      # Health check
+      - "traefik.http.services.backend.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.backend.loadbalancer.healthcheck.interval=30s"
+
+      # CORS Headers
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS,PATCH"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolalloworiginlist=http://localhost:5173,https://${DOMAIN:-localhost}"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolmaxage=100"
+      - "traefik.http.middlewares.backend-cors.headers.addvaryheader=true"
+      - "traefik.http.middlewares.backend-cors.headers.accesscontrolallowcredentials=true"
+
+      # Rate Limiting
+      - "traefik.http.middlewares.backend-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.backend-ratelimit.ratelimit.period=1m"
+      - "traefik.http.middlewares.backend-ratelimit.ratelimit.burst=50"
+
+      # Compress responses
+      - "traefik.http.middlewares.backend-compress.compress=true"
+
+      # Apply middlewares
+      - "traefik.http.routers.backend.middlewares=backend-cors,backend-ratelimit,backend-compress"
+
+      # HTTPS (if using Let's Encrypt)
+      # - "traefik.http.routers.backend-secure.rule=Host(`api.${DOMAIN}`)"
+      # - "traefik.http.routers.backend-secure.entrypoints=websecure"
+      # - "traefik.http.routers.backend-secure.tls.certresolver=letsencrypt"
+      # - "traefik.http.routers.backend-secure.middlewares=backend-cors,backend-ratelimit,backend-compress"
+    restart: unless-stopped
+
+  # ============================================
+  # REDIS (Caching & Background Jobs)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: brain_graph_redis
+    volumes:
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.routers.redis.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.redis.entrypoints=redis"
+      - "traefik.tcp.services.redis.loadbalancer.server.port=6379"
+    restart: unless-stopped
+
+  # ============================================
+  # BACKGROUND WORKER (Celery)
+  # ============================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_worker
+    command: celery -A app.worker worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - REDIS_URL=redis://redis:6379
+      - JINA_URL=http://jina:8000
+      - SIGLIP_URL=http://siglip:8000
+      - CODEBERT_URL=http://codebert:8000
+      - WHISPER_URL=http://whisper:8000
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
+    networks:
+      - brain_graph_network
+    restart: unless-stopped
+
+  # ============================================
+  # CELERY BEAT (Scheduled Tasks)
+  # ============================================
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_beat
+    command: celery -A app.worker beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://brain_graph_app:${DB_PASSWORD:-changeme}@postgres:5432/brain_graph
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+    networks:
+      - brain_graph_network
+    restart: unless-stopped
+
+  # ============================================
+  # CELERY FLOWER (Monitoring)
+  # ============================================
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brain_graph_flower
+    command: celery -A app.worker flower --port=5555
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379
+      - FLOWER_PORT=5555
+    depends_on:
+      - redis
+      - worker
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flower.rule=Host(`flower.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.flower.entrypoints=web"
+      - "traefik.http.services.flower.loadbalancer.server.port=5555"
+
+      # Basic Auth for Flower
+      # - "traefik.http.routers.flower.middlewares=flower-auth"
+      # - "traefik.http.middlewares.flower-auth.basicauth.users=admin:$$apr1$$..."
+    restart: unless-stopped
+
+  # ============================================
+  # FRONTEND (React + Vite)
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: brain_graph_frontend
+    environment:
+      - VITE_API_URL=http://api.${DOMAIN:-localhost}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+
+      # HTTP Router
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`) || Host(`www.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.services.frontend.loadbalancer.server.port=5173"
+
+      # Redirect www to non-www
+      - "traefik.http.middlewares.frontend-redirect.redirectregex.regex=^https?://www\\.(.+)"
+      - "traefik.http.middlewares.frontend-redirect.redirectregex.replacement=https://$${1}"
+      - "traefik.http.middlewares.frontend-redirect.redirectregex.permanent=true"
+
+      # Security headers
+      - "traefik.http.middlewares.frontend-headers.headers.browserxssfilter=true"
+      - "traefik.http.middlewares.frontend-headers.headers.contenttypenosniff=true"
+      - "traefik.http.middlewares.frontend-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.frontend-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.frontend-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.frontend-headers.headers.stsPreload=true"
+
+      # Apply middlewares
+      - "traefik.http.routers.frontend.middlewares=frontend-headers"
+
+      # HTTPS
+      # - "traefik.http.routers.frontend-secure.rule=Host(`${DOMAIN}`)"
+      # - "traefik.http.routers.frontend-secure.entrypoints=websecure"
+      # - "traefik.http.routers.frontend-secure.tls.certresolver=letsencrypt"
+      # - "traefik.http.routers.frontend-secure.middlewares=frontend-redirect,frontend-headers"
+    restart: unless-stopped
+
+  # ============================================
+  # PROMETHEUS (Metrics)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: brain_graph_prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.prometheus.entrypoints=web"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+    restart: unless-stopped
+
+  # ============================================
+  # GRAFANA (Dashboards)
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: brain_graph_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=http://grafana.${DOMAIN:-localhost}
+    volumes:
+      - ./docker/grafana/data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - brain_graph_network
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.grafana.entrypoints=web"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    restart: unless-stopped
