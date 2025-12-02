@@ -321,8 +321,8 @@ services:
       - redis
       - backend
     volumes:
-      - ./backend:/app:Z
-      - ./storage:/app/storage:Z
+      - ./backend:/app:z
+      - ./storage:/app/storage:z
     networks:
       - brain_graph_network
       - traefik_public
@@ -344,7 +344,7 @@ services:
       - postgres
       - redis
     volumes:
-      - ./backend:/app:Z
+      - ./backend:/app:z
     networks:
       - brain_graph_network
     restart: unless-stopped
@@ -365,7 +365,7 @@ services:
       - redis
       - worker
     volumes:
-      - ./backend:/app:Z
+      - ./backend:/app:z
     networks:
       - brain_graph_network
       - traefik_public

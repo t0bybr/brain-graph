@@ -12,8 +12,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 celery_app = Celery(
     "brain_graph",
     broker=REDIS_URL,
-    backend=REDIS_URL,
-    include=["app.tasks"]  # Import tasks module if it exists
+    backend=REDIS_URL
 )
 
 # Celery configuration
@@ -69,6 +68,13 @@ def cleanup_expired_scores():
 def health_check():
     """Simple health check task"""
     return {"status": "healthy", "worker": "operational"}
+
+
+# Import tasks to register them (must be after celery_app is defined)
+try:
+    from app import tasks  # noqa: F401
+except ImportError:
+    pass  # tasks.py is optional
 
 
 if __name__ == "__main__":

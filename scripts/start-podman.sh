@@ -41,7 +41,7 @@ fi
 
 # Start infrastructure
 echo "Starting infrastructure..."
-podman-compose -f podman-compose.yml up -d traefik backend postgres redis prometheus grafana worker beat
+podman-compose -f podman-compose.yml up -d traefik backend postgres redis prometheus grafana worker beat flower podman-socket-proxy
 
 # Wait for PostgreSQL to be ready and complete initialization
 echo "Waiting for PostgreSQL initialization..."
@@ -69,8 +69,8 @@ done
 
 # Start services
 echo "Starting application services..."
-podman-compose -f podman-compose.yml up flower -d --no-recreate
-podman-compose -f podman-compose.yml up -d --no-recreate podman-socket-proxy
+podman-compose -f podman-compose.yml up -d jina --no-recreate
+podman-compose -f podman-compose.yml up -d frontend --no-recreate
 
 echo ""
 echo "✅ Brain Graph is running!"
