@@ -11,8 +11,8 @@ BEGIN;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_chunks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     
     -- Position & Ordering
     chunk_index INTEGER NOT NULL,
@@ -97,9 +97,9 @@ COMMENT ON COLUMN node_chunks.code_metadata IS 'For code: language, symbol name,
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS chunk_edges (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_chunk_id UUID NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
-    target_chunk_id UUID NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    source_chunk_id TEXT NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
+    target_chunk_id TEXT NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
     edge_type VARCHAR(50) NOT NULL,
     properties JSONB DEFAULT '{}',
     created_by VARCHAR(10) DEFAULT 'system' CHECK (created_by IN ('user', 'system', 'ast')),
@@ -123,9 +123,9 @@ COMMENT ON TABLE chunk_edges IS 'Graph edges between chunks. Types:
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_chunk_edges (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    chunk_id UUID NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES node_chunks(id) ON DELETE CASCADE,
     edge_type VARCHAR(50) NOT NULL DEFAULT 'CONTAINS',
     properties JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT NOW(),

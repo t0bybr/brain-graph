@@ -20,6 +20,52 @@ EXCEPTION
         RAISE WARNING '✗ temporal_tables not available: %', SQLERRM;
 END $$;
 
+-- ULID Generator (pure SQL implementation)
+-- Generates 26-character ULIDs: 10 char timestamp + 16 char randomness
+-- Format: TTTTTTTTTTRRRRRRRRRRRRRRRR (Crockford's Base32)
+CREATE OR REPLACE FUNCTION generate_ulid()
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    encoding   TEXT := '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+    timestamp  BIGINT;
+    output     TEXT := '';
+    bytes      BYTEA;
+    v          BIGINT;
+BEGIN
+    -- Current timestamp in milliseconds (48 bits)
+    timestamp := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
+
+    -- Encode timestamp as 10 base32 characters (big-endian)
+    FOR i IN 0..9 LOOP
+        output := output || substr(encoding, ((timestamp >> (5 * (9 - i))) & 31)::INT + 1, 1);
+    END LOOP;
+
+    -- Generate 80 random bits as 10 bytes
+    bytes := gen_random_bytes(10);
+
+    -- Encode 16 base32 characters from 10 bytes (80 bits)
+    -- Each base32 char = 5 bits, so 16 chars = 80 bits
+    FOR i IN 0..15 LOOP
+        -- Calculate which bits to extract
+        v := get_byte(bytes, (i * 5) / 8)::BIGINT << 8;
+        IF ((i * 5) / 8) + 1 < 10 THEN
+            v := v | get_byte(bytes, ((i * 5) / 8) + 1)::BIGINT;
+        END IF;
+        v := (v >> (11 - ((i * 5) % 8))) & 31;
+        output := output || substr(encoding, v::INT + 1, 1);
+    END LOOP;
+
+    RETURN output;
+END;
+$$;
+
+DO $$
+BEGIN
+    RAISE NOTICE '✓ ULID generator function created';
+END $$;
+
 -- ParadeDB (optional, for BM25)
 DO $$
 BEGIN

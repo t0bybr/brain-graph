@@ -10,7 +10,7 @@ BEGIN;
 -- SIGNAL TRACKING
 -- ============================================
 
-CREATE OR REPLACE FUNCTION track_node_access(p_node_id UUID)
+CREATE OR REPLACE FUNCTION track_node_access(p_node_id TEXT)
 RETURNS void AS $$
 BEGIN
     -- Update node metadata
@@ -50,7 +50,7 @@ COMMENT ON FUNCTION track_node_access IS 'Record node access for decay computati
 -- ============================================
 
 CREATE OR REPLACE FUNCTION compute_decay_score(
-    p_node_id UUID,
+    p_node_id TEXT,
     at_time TIMESTAMP DEFAULT NOW()
 )
 RETURNS FLOAT AS $$
@@ -212,8 +212,8 @@ COMMENT ON FUNCTION get_graph_at_time IS 'Reconstruct graph state at any point i
 -- ============================================
 
 CREATE OR REPLACE FUNCTION mark_node_superseded(
-    p_old_node_id UUID,
-    p_new_node_id UUID,
+    p_old_node_id TEXT,
+    p_new_node_id TEXT,
     p_reason TEXT DEFAULT NULL
 )
 RETURNS void AS $$
@@ -294,6 +294,73 @@ $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION cleanup_old_signals IS 'Archive or delete old signal data';
 
+-- ============================================
+-- HISTORY RESTORE
+-- ============================================
+
+CREATE OR REPLACE FUNCTION restore_node_from_history(
+    p_node_id TEXT,
+    p_timestamp TIMESTAMPTZ
+)
+RETURNS TABLE (
+    nodes_restored INTEGER,
+    edges_restored INTEGER,
+    status TEXT
+) AS $$
+DECLARE
+    node_count INTEGER := 0;
+    edge_count INTEGER := 0;
+    node_exists BOOLEAN;
+BEGIN
+    -- Check if node already exists
+    SELECT EXISTS(SELECT 1 FROM nodes WHERE id = p_node_id) INTO node_exists;
+
+    IF node_exists THEN
+        RAISE NOTICE 'Node % already exists - skipping node restore', p_node_id;
+    ELSE
+        -- Restore node from history
+        INSERT INTO nodes
+        SELECT * FROM nodes_history
+        WHERE id = p_node_id
+          AND sys_period @> p_timestamp
+        LIMIT 1;
+
+        GET DIAGNOSTICS node_count = ROW_COUNT;
+
+        IF node_count = 0 THEN
+            RETURN QUERY SELECT
+                0::INTEGER,
+                0::INTEGER,
+                format('Node %s not found in history at %s', p_node_id, p_timestamp)::TEXT;
+            RETURN;
+        END IF;
+
+        RAISE NOTICE '✓ Restored node % from %', p_node_id, p_timestamp;
+    END IF;
+
+    -- Restore all edges (both incoming and outgoing)
+    INSERT INTO graph_edges
+    SELECT * FROM graph_edges_history
+    WHERE (source_id = p_node_id OR target_id = p_node_id)
+      AND sys_period @> p_timestamp
+    ON CONFLICT (source_id, target_id, edge_type) DO NOTHING;
+
+    GET DIAGNOSTICS edge_count = ROW_COUNT;
+
+    RAISE NOTICE '✓ Restored % edges for node %', edge_count, p_node_id;
+
+    -- AGE sync happens automatically via triggers ✅
+
+    RETURN QUERY SELECT
+        node_count::INTEGER,
+        edge_count::INTEGER,
+        format('Restored node=%s, edges=%s', node_count, edge_count)::TEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION restore_node_from_history(TEXT, TIMESTAMPTZ) IS
+    'Restore a node and its edges from history at a specific timestamp. AGE sync happens automatically via triggers.';
+
 COMMIT;
 
 DO $$
@@ -303,5 +370,6 @@ BEGIN
     RAISE NOTICE '  • compute_decay_score / compute_and_store_decay_scores';
     RAISE NOTICE '  • get_graph_at_time';
     RAISE NOTICE '  • mark_node_superseded';
+    RAISE NOTICE '  • restore_node_from_history';
     RAISE NOTICE '  • cleanup_expired_scores / cleanup_old_signals';
 END $$;

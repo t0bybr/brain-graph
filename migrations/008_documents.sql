@@ -11,8 +11,8 @@ BEGIN;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS documents (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID REFERENCES nodes(id) ON DELETE SET NULL,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
     
     -- Source info
     source_path TEXT,
@@ -41,8 +41,8 @@ COMMENT ON TABLE documents IS 'Source document metadata for PDFs, scans, etc.';
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS document_blocks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     
     -- Position
     page INTEGER NOT NULL,

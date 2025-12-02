@@ -11,8 +11,8 @@ BEGIN;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_signals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     signal_type signal_type NOT NULL,
     value FLOAT DEFAULT 1.0,
     metadata JSONB DEFAULT '{}',
@@ -30,7 +30,7 @@ COMMENT ON TABLE node_signals IS 'Time-series user interaction signals for decay
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_scores (
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     score_type score_type NOT NULL,
     model_name VARCHAR(100) DEFAULT 'default',
     value FLOAT NOT NULL,
@@ -53,8 +53,8 @@ COMMENT ON TABLE node_scores IS 'Computed scores: decay, importance, novelty, qu
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS searches (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID REFERENCES nodes(id) ON DELETE CASCADE,  -- Optional linked SearchNode
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,  -- Optional linked SearchNode
     title TEXT NOT NULL,
     query JSONB NOT NULL,  -- Full search parameters
     is_persistent BOOLEAN DEFAULT FALSE,

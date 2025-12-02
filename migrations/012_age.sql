@@ -91,6 +91,19 @@ BEGIN
             WHEN OTHERS THEN
                 RAISE WARNING '○ Could not create graph: %', SQLERRM;
         END;
+
+        -- Grant permissions to app user
+        BEGIN
+            GRANT USAGE ON SCHEMA ag_catalog TO brain_graph_app;
+            GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO brain_graph_app;
+            GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO brain_graph_app;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA ag_catalog GRANT SELECT ON TABLES TO brain_graph_app;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA ag_catalog GRANT EXECUTE ON FUNCTIONS TO brain_graph_app;
+            RAISE NOTICE '✓ Granted AGE permissions to brain_graph_app';
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING '○ Could not grant AGE permissions: %', SQLERRM;
+        END;
     ELSE
         RAISE NOTICE '○ AGE not available - graph features disabled';
         RAISE NOTICE '  The system will work with relational tables only';

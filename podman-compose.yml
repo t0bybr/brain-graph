@@ -325,6 +325,7 @@ services:
       - ./storage:/app/storage:Z
     networks:
       - brain_graph_network
+      - traefik_public
     restart: unless-stopped
 
   # ============================================
@@ -363,6 +364,8 @@ services:
     depends_on:
       - redis
       - worker
+    volumes:
+      - ./backend:/app:Z
     networks:
       - brain_graph_network
       - traefik_public

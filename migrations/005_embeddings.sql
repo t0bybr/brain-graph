@@ -103,11 +103,11 @@ ON CONFLICT (model_name) DO NOTHING;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_embeddings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     
     -- Optional: Chunk reference (NULL for node-level embeddings)
-    chunk_id UUID,  -- FK will be added after chunks table exists
+    chunk_id TEXT,  -- FK will be added after chunks table exists
     
     -- Model Info
     modality VARCHAR(20) NOT NULL,

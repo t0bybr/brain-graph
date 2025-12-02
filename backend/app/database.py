@@ -18,14 +18,20 @@ async def init_connection(conn):
     except Exception as e:
         print(f"Warning: Could not load AGE: {e}")
 
-    await conn.execute('SET search_path = ag_catalog, "$user", public')
+    try:
+        await conn.execute('SET search_path = ag_catalog, "$user", public')
+    except Exception:
+        # Fall back if AGE schema is not available
+        await conn.execute('SET search_path = "$user", public')
 
     try:
         await conn.fetchval("SELECT ag_catalog.agtype_in('1')")
     except Exception as e:
-        raise RuntimeError(
-            "AGE is not available. Ensure 'age' is in shared_preload_libraries"
-        ) from e
+        print(
+            "Warning: AGE is not available (ag_catalog.agtype_in failed). "
+            "Continuing with relational features only."
+        )
+        # AGE not available, continue without raising
 
 
 async def init_db_pool():

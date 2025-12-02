@@ -61,7 +61,7 @@ COMMENT ON COLUMN taxonomy.usage_focus IS 'Weight of usage frequency in ranking 
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_categories (
-    node_id UUID REFERENCES nodes(id) ON DELETE CASCADE,
+    node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
     category_id INTEGER REFERENCES taxonomy(id) ON DELETE CASCADE,
     confidence FLOAT NOT NULL CHECK (confidence BETWEEN 0 AND 1),
     assigned_by VARCHAR(10) NOT NULL CHECK (assigned_by IN ('user', 'llm')),

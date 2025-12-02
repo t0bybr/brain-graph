@@ -12,20 +12,20 @@ BEGIN;
 
 -- Get chunks with context (PREV/NEXT)
 CREATE OR REPLACE FUNCTION get_chunk_with_context(
-    p_chunk_id UUID,
+    p_chunk_id TEXT,
     p_context_before INTEGER DEFAULT 1,
     p_context_after INTEGER DEFAULT 1
 )
 RETURNS TABLE (
-    chunk_id UUID,
-    node_id UUID,
+    chunk_id TEXT,
+    node_id TEXT,
     chunk_index INTEGER,
     content TEXT,
     summary TEXT,
     is_target BOOLEAN
 ) AS $$
 DECLARE
-    v_node_id UUID;
+    v_node_id TEXT;
     v_chunk_index INTEGER;
 BEGIN
     -- Get target chunk info
@@ -58,9 +58,9 @@ $$ LANGUAGE plpgsql STABLE;
 COMMENT ON FUNCTION get_chunk_with_context IS 'Get a chunk with surrounding context chunks for RAG';
 
 -- Get all chunks for a node
-CREATE OR REPLACE FUNCTION get_node_chunks(p_node_id UUID)
+CREATE OR REPLACE FUNCTION get_node_chunks(p_node_id TEXT)
 RETURNS TABLE (
-    chunk_id UUID,
+    chunk_id TEXT,
     chunk_index INTEGER,
     content TEXT,
     summary TEXT,
@@ -87,11 +87,11 @@ $$ LANGUAGE plpgsql STABLE;
 COMMENT ON FUNCTION get_node_chunks IS 'Get all chunks for a node in order';
 
 -- Auto-create NEXT/PREV/CONTAINS edges
-CREATE OR REPLACE FUNCTION create_chunk_sequence_edges(p_node_id UUID)
+CREATE OR REPLACE FUNCTION create_chunk_sequence_edges(p_node_id TEXT)
 RETURNS INTEGER AS $$
 DECLARE
     edge_count INTEGER := 0;
-    prev_chunk_id UUID := NULL;
+    prev_chunk_id TEXT := NULL;
     curr RECORD;
 BEGIN
     -- First: Create CONTAINS edges from node to all chunks
@@ -142,8 +142,8 @@ CREATE OR REPLACE FUNCTION search_chunks(
     p_context_size INTEGER DEFAULT 1
 )
 RETURNS TABLE (
-    chunk_id UUID,
-    node_id UUID,
+    chunk_id TEXT,
+    node_id TEXT,
     node_title TEXT,
     chunk_index INTEGER,
     content TEXT,
@@ -227,8 +227,8 @@ CREATE OR REPLACE FUNCTION hybrid_search_chunks(
     p_language VARCHAR(10) DEFAULT 'en'
 )
 RETURNS TABLE (
-    chunk_id UUID,
-    node_id UUID,
+    chunk_id TEXT,
+    node_id TEXT,
     node_title TEXT,
     content TEXT,
     summary TEXT,
@@ -301,7 +301,7 @@ CREATE OR REPLACE FUNCTION hybrid_search(
     p_node_types node_type[] DEFAULT NULL
 )
 RETURNS TABLE (
-    node_id UUID,
+    node_id TEXT,
     node_type node_type,
     title TEXT,
     bm25_score FLOAT,

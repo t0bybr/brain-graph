@@ -11,7 +11,7 @@ BEGIN;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS nodes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
     type node_type NOT NULL,
     title TEXT NOT NULL,
     

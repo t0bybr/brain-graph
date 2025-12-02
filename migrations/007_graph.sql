@@ -11,9 +11,9 @@ BEGIN;
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS graph_edges (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    target_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
+    source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     edge_type VARCHAR(50) NOT NULL,
     properties JSONB DEFAULT '{}',
     created_by VARCHAR(10) DEFAULT 'system' CHECK (created_by IN ('user', 'system')),
@@ -53,8 +53,8 @@ COMMENT ON TABLE graph_edges IS 'Graph relationships between nodes. Types includ
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS rejected_edges (
-    source_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    target_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     edge_type VARCHAR(50) NOT NULL,
     rejected_by VARCHAR(10) NOT NULL CHECK (rejected_by IN ('user', 'system', 'rule')),
     rejected_at TIMESTAMP DEFAULT NOW(),
@@ -74,7 +74,7 @@ COMMENT ON TABLE rejected_edges IS 'Tracks user-rejected or invalid edge suggest
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS graph_nodes (
-    node_id UUID PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+    node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
     graph_label VARCHAR(50) NOT NULL,
     created_in_graph_at TIMESTAMP DEFAULT NOW()
 );
@@ -88,13 +88,13 @@ COMMENT ON TABLE graph_nodes IS 'Mirror of nodes that exist in AGE graph databas
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS entities (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id TEXT PRIMARY KEY DEFAULT generate_ulid(),
     entity_type VARCHAR(50) NOT NULL,  -- PERSON, ORG, LOCATION, PROJECT, EVENT
     canonical_name TEXT NOT NULL,
     normalized_name TEXT NOT NULL,  -- lowercase, trimmed for dedup
     
     metadata JSONB DEFAULT '{}',
-    merged_into UUID REFERENCES entities(id) ON DELETE SET NULL,
+    merged_into TEXT REFERENCES entities(id) ON DELETE SET NULL,
     
     created_at TIMESTAMP DEFAULT NOW(),
     
@@ -112,8 +112,8 @@ COMMENT ON TABLE entities IS 'Named entities: PERSON, ORG, LOCATION, PROJECT, EV
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS node_entities (
-    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL,  -- author, mentioned, location, etc.
     confidence FLOAT CHECK (confidence BETWEEN 0 AND 1),
     source VARCHAR(100),  -- which NER model extracted this

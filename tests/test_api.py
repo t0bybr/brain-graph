@@ -1,5 +1,3 @@
-from uuid import UUID
-
 import pytest
 
 
@@ -20,7 +18,8 @@ async def test_create_node_api(client, sample_node_data):
     data = response.json()
 
     assert "id" in data
-    assert UUID(data["id"])  # Valid UUID
+    assert isinstance(data["id"], str)
+    assert len(data["id"]) == 26  # ULID length
     assert data["type"] == sample_node_data["type"]
     assert data["title"] == sample_node_data["title"]
 

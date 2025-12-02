@@ -37,6 +37,9 @@ RUN cd /tmp && \
     make install && \
     cd .. && rm -rf temporal_tables
 
+# Note: ULID will be implemented as SQL function in migrations
+# No additional dependencies needed
+
 # Cleanup
 RUN apt-get purge -y build-essential git cmake && \
     apt-get autoremove -y && \
